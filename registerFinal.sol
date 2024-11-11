@@ -4,6 +4,14 @@ pragma solidity >=0.5.0 <0.9.0;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
+event OwnershipTransferred(address indexed from, address indexed to, uint256 amount);
+event AttributeAdded(uint indexed attributeId, bytes32 description);
+event AttributeModified(uint indexed attributeId, bytes32 newDescription);
+event JudgeRegistered(uint indexed attributeId, address indexed judge);
+event ApprovalTokensModified(uint newAmount);
+event TokensMinted(address[] targetAddresses, uint[] amounts, uint newTotal);
+event ValidationRegistered(uint indexed attributeId, address indexed judge);
+
 contract Register is ERC20 {
 
     //#-----------------Register Governation Data--------------#
@@ -18,7 +26,7 @@ contract Register is ERC20 {
     }
 
     mapping (uint => Attribute) public attributes;
-    mapping (uint => bool) public registeredAttributes;
+    mapping (uint => bool) internal registeredAttributes;
 
     //#-----------------Validation data----------------#
     mapping(uint => address[]) public permittedJudges;// Maps an attribute ID to a list of permitted judges
@@ -42,10 +50,6 @@ contract Register is ERC20 {
         mapping(address => bool) votes;
     }
 
-    struct NewAttributeProposal {
-        bytes32 description;
-    }
-
     struct ModifyAttributeProposal {
         uint referenceId;
         bytes32 newDescription;
@@ -56,10 +60,6 @@ contract Register is ERC20 {
         address judge;
     }
 
-    struct NewVotesForApprovalProposal{
-        uint newAmount;
-    }
-
     struct MindNewTokensProposal{
         address[] targetAddresses;
         uint[] amountOfTokens;
@@ -68,10 +68,10 @@ contract Register is ERC20 {
     mapping(uint => Proposal) internal proposals;
     mapping(uint => bool) internal validProposals;
 
-    mapping(uint => NewAttributeProposal) internal newAttributeProposals;
+    mapping(uint => bytes32) internal newAttributeProposals;
     mapping(uint => ModifyAttributeProposal) internal modifyAttributeProposals;
     mapping(uint => RegisterJudgeProposal) internal registerJudgeProposals;
-    mapping(uint => NewVotesForApprovalProposal) internal newVotesForAprrovalProposals;
+    mapping(uint => uint) internal newVotesForAprrovalProposals;
     mapping(uint => MindNewTokensProposal) internal mindNewTokensProposals;
 
     mapping(ProposalType => function(uint) internal) internal proposalApprovers;
@@ -159,12 +159,14 @@ contract Register is ERC20 {
     //#----------------Fundamental Modification Functions--------------------#
     function transferOwnershipTokens(address to, uint256 amount) public {
         transfer(to, amount);  // Standard ERC-20 transfer function
+        emit OwnershipTransferred(msg.sender, to, amount);
     }
 
     function addNewAttribute(bytes32 description) private {
         uint newAttributeId = attributesCount++;
         attributes[newAttributeId].description = description;
         registeredAttributes[newAttributeId] = true;
+        emit AttributeAdded(newAttributeId, description);
     }
 
     function modifyAttribute(uint attributeId, bytes32 newDescription) private {
@@ -176,23 +178,17 @@ contract Register is ERC20 {
             delete attributes[attributeId].validations[judges[i]];
         }
         delete validations[attributeId];
+        emit AttributeModified(attributeId, newDescription);
     }
 
     function registerJudge(uint attributeId, address judge) private {
         permittedJudges[attributeId].push(judge);
-    }
-
-    function addNewProposal(ProposalType typeOf) private returns (uint) {
-        Proposal storage proposal = proposals[proposalCount];
-        proposal.votesInFavor = 0;
-        proposal.idToSpecificDataProposal = proposalCount;
-        proposal.especificType = typeOf;
-        validProposals[proposalCount] = true;
-        return proposalCount++;
+        emit JudgeRegistered(attributeId, judge);
     }
 
     function modifyAmountOfVotesForApproval(uint newAmount) private {
         minApprovalTokens = newAmount;
+        emit ApprovalTokensModified(newAmount);
     }
 
     function mindNewTokens(address[] memory targetAddresses, uint[] memory amountOfTokens) private {
@@ -203,14 +199,30 @@ contract Register is ERC20 {
             newTotal += amountOfTokens[i];
         }
         totalAmountOfTokens += newTotal;
+        emit TokensMinted(targetAddresses, amountOfTokens, newTotal);
+    }
+
+    function registerValidationByJudge(uint idAttribute)
+        public onlyValidAttributes(idAttribute) onlyJudgesAllowed(idAttribute){
+        attributes[idAttribute].validations[msg.sender] = true;
+        validations[idAttribute].push(msg.sender);
+        emit ValidationRegistered(idAttribute, msg.sender);
     }
 
     //#--------------Proposals functions-------------------------#
+    function addNewProposal(ProposalType typeOf) private returns (uint) {
+        Proposal storage proposal = proposals[proposalCount];
+        proposal.votesInFavor = 0;
+        proposal.idToSpecificDataProposal = proposalCount;
+        proposal.especificType = typeOf;
+        validProposals[proposalCount] = true;
+        return proposalCount++;
+    }
+
     function proposeNewAttribute(bytes32 description)
         public onlyOwner returns (uint) {
         uint newProposalId = addNewProposal(ProposalType.NewAttribute);
-        NewAttributeProposal storage proposal = newAttributeProposals[newProposalId];
-        proposal.description = description;
+        newAttributeProposals[newProposalId] = description;
         return newProposalId;
     }
 
@@ -235,8 +247,7 @@ contract Register is ERC20 {
     function proposeNewVotesForApproval(uint newAmount) 
         public onlyOwner onlyValidTokenQuantity(newAmount) returns (uint) {
         uint newProposalId = addNewProposal(ProposalType.NewVotesForApproval);
-        NewVotesForApprovalProposal storage proposal = newVotesForAprrovalProposals[newProposalId];
-        proposal.newAmount = newAmount;
+        newVotesForAprrovalProposals[newProposalId] = newAmount;
         return newProposalId;
     }
 
@@ -247,14 +258,6 @@ contract Register is ERC20 {
         proposal.targetAddresses = targetAddresses;
         proposal.amountOfTokens = amountOfTokens;
         return newProposalId;
-    }
-
-    //#-------------Judge actions-------------------#
-    // Function for a judge to validate an attribute if they are permitted
-    function registerValidationByJudge(uint idAttribute)
-        public onlyValidAttributes(idAttribute) onlyJudgesAllowed(idAttribute){
-        attributes[idAttribute].validations[msg.sender] = true;
-        validations[idAttribute].push(msg.sender);
     }
 
     //#-------------------Voting functions----------------------------#
@@ -268,7 +271,7 @@ contract Register is ERC20 {
 
     //---------------------Approve functions--------------------------#
     function approveNewAttributeProposal(uint proposalId) internal {
-        addNewAttribute(newAttributeProposals[proposalId].description);
+        addNewAttribute(newAttributeProposals[proposalId]);
         delete newAttributeProposals[proposalId];
     }
 
@@ -285,8 +288,7 @@ contract Register is ERC20 {
     }
 
     function approveNewVotesForApprovalProposal(uint proposalId) internal {
-        NewVotesForApprovalProposal storage proposal = newVotesForAprrovalProposals[proposalId];
-        modifyAmountOfVotesForApproval(proposal.newAmount);
+        modifyAmountOfVotesForApproval(newVotesForAprrovalProposals[proposalId]);
         delete newVotesForAprrovalProposals[proposalId];
     }
 
@@ -308,7 +310,7 @@ contract Register is ERC20 {
     function getNewAttributeProposal(uint proposalId) 
         public view onlyValidProposals(proposalId) 
         returns (bytes32 _description) {
-        return (newAttributeProposals[proposalId].description);
+        return (newAttributeProposals[proposalId]);
     }
 
     function getModifyAttributeProposal(uint proposalId) 
